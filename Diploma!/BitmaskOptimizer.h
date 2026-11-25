@@ -7,6 +7,7 @@
 
 #ifdef _MSC_VER
 #include <intrin.h>
+#define MASK_NOINLINE __declspec(noinline)
 inline int count_active(uint64_t mask) { return (int)__popcnt64(mask); }
 inline int get_lowest_bit(uint64_t mask) {
     unsigned long index;
@@ -14,11 +15,12 @@ inline int get_lowest_bit(uint64_t mask) {
     return (int)index;
 }
 #else
+#define MASK_NOINLINE __attribute__((noinline))
 inline int count_active(uint64_t mask) { return __builtin_popcountll(mask); }
 inline int get_lowest_bit(uint64_t mask) { return __builtin_ctzll(mask); }
 #endif
 
-// 42 хватает до Grid 6x7 включительно (можно увеличить до 64)
+// 42 хватает до Grid 6x7 включительно (при необходимости можно увеличить до 64)
 #define MAX_NODES 42
 constexpr int MAX_EDGES = MAX_NODES * (MAX_NODES - 1) / 2;
 
@@ -26,6 +28,11 @@ struct alignas(64) MaskAlignedDouble {
     double val;
     char pad[64 - sizeof(double)];
 };
+
+inline MaskAlignedDouble* get_mask_rel_arr() {
+    alignas(64) static MaskAlignedDouble arr[128];
+    return arr;
+}
 
 struct GraphMask {
     int num_nodes;
@@ -63,7 +70,6 @@ struct GraphMask {
     }
 };
 
-// Проверка связности через битовый BFS
 inline bool is_connected_mask(const GraphMask& g) {
     if (g.active_nodes == 0) return true;
     uint64_t visited = g.active_nodes & (~g.active_nodes + 1);
@@ -113,7 +119,6 @@ inline void contract_edge_mask(GraphMask& g, int u, int v) {
     g.adj[u] &= ~(1ULL << v);
 }
 
-// Удаление висячих вершин (степень 1) + PST (степень 2)
 inline bool simplify_mask(GraphMask& g, double& mult) {
     bool changed = true;
     while (changed) {
@@ -177,7 +182,6 @@ inline bool simplify_mask(GraphMask& g, double& mult) {
     return true;
 }
 
-// Эвристика выбора ребра (приоритет: сумма степеней == 6 + треугольник)
 inline void choose_edge_mask(const GraphMask& g, int& out_u, int& out_v) {
     int min_deg_sum = 100000;
     bool best_in_triangle = false;
@@ -214,7 +218,6 @@ inline void choose_edge_mask(const GraphMask& g, int& out_u, int& out_v) {
     }
 }
 
-// Точные формулы всетерминальной надёжности для графов N <= 5
 inline double base_probabilities_mask(const GraphMask& g, int n_active) {
     if (n_active <= 1) return 1.0;
 
@@ -291,7 +294,7 @@ inline double base_probabilities_mask(const GraphMask& g, int n_active) {
 
 // ---------- ПОСЛЕДОВАТЕЛЬНАЯ ВЕРСИЯ ----------
 
-inline double factoring_mask_rec(const GraphMask& g_in, bool assumed_connected);
+inline double factoring_mask_rec(GraphMask& g, bool assumed_connected);
 
 inline double factoring_mask_branch_serial(GraphMask& g) {
     int u, v;
@@ -310,11 +313,10 @@ inline double factoring_mask_branch_serial(GraphMask& g) {
     return p * rel_contract + (1.0 - p) * rel_delete;
 }
 
-inline double factoring_mask_rec(const GraphMask& g_in, bool assumed_connected) {
-    if (count_active(g_in.active_nodes) <= 1) return 1.0;
-    if (!assumed_connected && !is_connected_mask(g_in)) return 0.0;
+inline double factoring_mask_rec(GraphMask& g, bool assumed_connected) {
+    if (count_active(g.active_nodes) <= 1) return 1.0;
+    if (!assumed_connected && !is_connected_mask(g)) return 0.0;
 
-    GraphMask g = g_in;
     double mult = 1.0;
     if (!simplify_mask(g, mult)) return 0.0;
 
@@ -326,88 +328,93 @@ inline double factoring_mask_rec(const GraphMask& g_in, bool assumed_connected) 
     return mult * factoring_mask_branch_serial(g);
 }
 
-inline double factoring_mask(const GraphMask& g) {
+inline double factoring_mask(const GraphMask& g_in) {
+    GraphMask g = g_in;
     return factoring_mask_rec(g, false);
 }
 
 // ---------- ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ (OpenMP no-taskwait + AlignedDouble) ----------
 
-inline void factoring_mask_no_reverse_task(
-    const GraphMask& g_in,
+MASK_NOINLINE inline void factoring_mask_no_reverse_task(
+    GraphMask* g_ptr,
     bool assumed_connected,
     double current_prob,
-    int cutoff,
-    MaskAlignedDouble* rel_arr
+    int cutoff
 ) {
     if (current_prob <= 0.0) return;
 
-    if (count_active(g_in.active_nodes) <= 1) {
+    MaskAlignedDouble* rel_arr = get_mask_rel_arr();
+
+    if (count_active(g_ptr->active_nodes) <= 1) {
         rel_arr[omp_get_thread_num()].val += current_prob;
         return;
     }
 
-    if (!assumed_connected && !is_connected_mask(g_in)) return;
+    if (!assumed_connected && !is_connected_mask(*g_ptr)) return;
 
-    GraphMask g = g_in;
     double mult = 1.0;
-    if (!simplify_mask(g, mult)) return;
+    if (!simplify_mask(*g_ptr, mult)) return;
 
     double acc_prob = current_prob * mult;
-    int n_active = count_active(g.active_nodes);
+    int n_active = count_active(g_ptr->active_nodes);
 
     if (n_active <= 5) {
-        rel_arr[omp_get_thread_num()].val += acc_prob * base_probabilities_mask(g, n_active);
+        rel_arr[omp_get_thread_num()].val += acc_prob * base_probabilities_mask(*g_ptr, n_active);
         return;
     }
 
-    // Порог отсечения: ниже cutoff отключаем порождение задач OpenMP
+    // Ниже cutoff досчитываем поддерево последовательно на стеке без создания задач
     if (n_active <= cutoff) {
-        rel_arr[omp_get_thread_num()].val += acc_prob * factoring_mask_branch_serial(g);
+        rel_arr[omp_get_thread_num()].val += acc_prob * factoring_mask_branch_serial(*g_ptr);
         return;
     }
 
     int u, v;
-    choose_edge_mask(g, u, v);
+    choose_edge_mask(*g_ptr, u, v);
     if (u == -1 || v == -1) return;
 
-    double p = g.p_const(u, v);
+    double p = g_ptr->p_const(u, v);
 
-    // Ветка стягивания (G + e) уходит в асинхронную задачу OpenMP (fire-and-forget)
+    // Ветка стягивания (G + e) -> в задачу OpenMP (в firstprivate только указатель и скаляры)
     double p_contract = acc_prob * p;
     if (p_contract > 0.0) {
-        GraphMask g_contract = g;
-        contract_edge_mask(g_contract, u, v);
-#pragma omp task firstprivate(g_contract, p_contract, cutoff, rel_arr)
+        GraphMask* g_contract = new GraphMask(*g_ptr);
+        contract_edge_mask(*g_contract, u, v);
+#pragma omp task firstprivate(g_contract, p_contract, cutoff)
         {
-            factoring_mask_no_reverse_task(g_contract, true, p_contract, cutoff, rel_arr);
+            factoring_mask_no_reverse_task(g_contract, true, p_contract, cutoff);
+            delete g_contract;
         }
     }
 
-    // Ветка удаления (G - e) продолжает выполняться текущим потоком
+    // Ветка удаления (G - e) -> на месте в текущем потоке без копирования
     double p_delete = acc_prob * (1.0 - p);
     if (p_delete > 0.0) {
-        delete_edge_mask(g, u, v);
-        factoring_mask_no_reverse_task(g, false, p_delete, cutoff, rel_arr);
+        delete_edge_mask(*g_ptr, u, v);
+        factoring_mask_no_reverse_task(g_ptr, false, p_delete, cutoff);
     }
 }
 
-inline double factoring_mask_parallel(const GraphMask& g, int cutoff = 10) {
-    constexpr int MAX_THREADS = 128;
-    alignas(64) MaskAlignedDouble rel_arr[MAX_THREADS];
-    for (int i = 0; i < MAX_THREADS; ++i) {
+MASK_NOINLINE inline double factoring_mask_parallel(const GraphMask& g_in, int cutoff = 10) {
+    MaskAlignedDouble* rel_arr = get_mask_rel_arr();
+    for (int i = 0; i < 128; ++i) {
         rel_arr[i].val = 0.0;
     }
 
+    GraphMask root_g = g_in;
+
 #pragma omp parallel
     {
-#pragma omp single nowait
+#pragma omp single
         {
-            factoring_mask_no_reverse_task(g, false, 1.0, cutoff, rel_arr);
+            factoring_mask_no_reverse_task(&root_g, false, 1.0, cutoff);
         }
     }
 
     double total_rel = 0.0;
-    for (int i = 0; i < MAX_THREADS; ++i) {
+    int max_th = omp_get_max_threads();
+    if (max_th > 128) max_th = 128;
+    for (int i = 0; i < max_th; ++i) {
         total_rel += rel_arr[i].val;
     }
     return total_rel;
