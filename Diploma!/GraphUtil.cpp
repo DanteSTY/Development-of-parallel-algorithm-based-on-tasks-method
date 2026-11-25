@@ -9,10 +9,7 @@
 #include <omp.h>
 namespace math {
     
-    int GraphFactory::count_of_triangles_arr[64] = { 0 };
-    int GraphFactory::count_of_edges_degs_6_arr[64] = { 0 };
-    int GraphFactory::count_first_triangles_arr[64] = { 0 };
-    int GraphFactory::recursive_deep_arr[64] = { 0 };
+    GraphFactory::ThreadStats GraphFactory::stats_arr[64] = {};
     
     GraphFactory::AlignedDouble GraphFactory::rel_arr[64] = { 0.0 };
 
@@ -415,7 +412,7 @@ void GraphFactory::choseVerts(Graph*& graph, double& p, u_int& u, u_int& v, u_in
             int degV = graph->KAO[V] - graph->KAO[V - 1];
 
             if (degU + degV == 6) {
-                GraphFactory::count_of_edges_degs_6_arr[omp_get_thread_num()]++;
+                GraphFactory::stats_arr[omp_get_thread_num()].count_of_edges_degs_6++;
 
                 for (size_t k = degU; k > 0; k--) {
                     int UV = graph->FO[indexU + k];
@@ -426,7 +423,7 @@ void GraphFactory::choseVerts(Graph*& graph, double& p, u_int& u, u_int& v, u_in
 
                         for (size_t l = 0; l < degUV; l++) {
                             if (graph->FO[indexUV + l] == V) {
-                                GraphFactory::count_of_triangles_arr[omp_get_thread_num()]++;
+                                GraphFactory::stats_arr[omp_get_thread_num()].count_of_triangles++;
                                 u = i;
                                 v = V;
                                 uC = u;
@@ -435,7 +432,7 @@ void GraphFactory::choseVerts(Graph*& graph, double& p, u_int& u, u_int& v, u_in
                                 p = graph->FORel[indexU + j];
 
                                 if (cft == 0)
-                                    GraphFactory::count_first_triangles_arr[omp_get_thread_num()]++;
+                                    GraphFactory::stats_arr[omp_get_thread_num()].count_first_triangles++;
                                 return;
                             }
                         }
@@ -513,7 +510,7 @@ static double reduceGraph(Graph* graph) {
 void GraphFactory::branchingWithNoReverse(Graph *&graph, double &rel, double prob) {
     //recursive_deep++;
     //recursive_deep.fetch_add(1);
-    GraphFactory::recursive_deep_arr[omp_get_thread_num()]++;
+    GraphFactory::stats_arr[omp_get_thread_num()].recursive_deep++;
 
     u_int u, v, uC, vC;
     double pstFactor, p;
@@ -541,7 +538,7 @@ void GraphFactory::branchingWithNoReverse(Graph *&graph, double &rel, double pro
 //параллелизация без обратного хода
 void GraphFactory::branchingWithNoReverse_parallel(Graph* graph, double prob) {
     int tid = omp_get_thread_num();
-    GraphFactory::recursive_deep_arr[tid]++;
+    GraphFactory::stats_arr[tid].recursive_deep++;
 
     u_int u, v, uC, vC;
     double pstFactor, p;
@@ -596,7 +593,7 @@ void GraphFactory::branchingWithNoReverse_parallel(Graph* graph, double prob) {
 
 //ветвление
 double GraphFactory::branching(Graph*& graph) {
-    GraphFactory::recursive_deep_arr[omp_get_thread_num()]++;
+    GraphFactory::stats_arr[omp_get_thread_num()].recursive_deep++;
     u_int u, v, uC, vC;
     double pstFactor, p, result;
 
@@ -626,7 +623,7 @@ double GraphFactory::branching(Graph*& graph) {
 }
 //паралллизация(ветвление) с обратным ходом
 double GraphFactory::branching_parallel(Graph* graph) {
-    GraphFactory::recursive_deep_arr[omp_get_thread_num()]++;
+    GraphFactory::stats_arr[omp_get_thread_num()].recursive_deep++;
 
     u_int u, v, uC, vC;
     double pstFactor, p, result = 0;
@@ -677,10 +674,7 @@ double GraphFactory::branching_parallel(Graph* graph) {
 double GraphFactory::factoring(Graph*& graph, FactoringType factoringType, FactoringExecutionType execType) {
   
     for (int i = 0; i < 64; i++) {
-        recursive_deep_arr[i] = 0;
-        count_of_triangles_arr[i] = 0;
-        count_of_edges_degs_6_arr[i] = 0;
-        count_first_triangles_arr[i] = 0;
+        stats_arr[i] = {};
         rel_arr[i].val = 0.0;
     }
 

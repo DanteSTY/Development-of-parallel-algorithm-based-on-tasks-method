@@ -231,7 +231,7 @@ Graph *Graph::mergeEdge(u_int u, u_int v) const {
     }
 
     for (u_int i = KAO[newVert - 1]; i < KAO[newVert]; i++) {
-        if (FO[i] == v) {
+        if (FO[i] == delVert) {
             continue;
         }
         if (isEdge(FO[i], delVert)) {
@@ -718,7 +718,10 @@ double Graph::baseProbabilities() const {
                 }  
             }
         }
-        result = (R[0][0]*R[0][1]*R[1][1]+(1-R[0][0])*R[0][1]*R[1][1]+R[0][0]*(1-R[0][1])*R[1][1]+R[0][0]*R[0][1]*(1-R[1][1]));
+        result = 1.0 - (R[0][0] * R[0][1] * R[1][1]
+            + (1.0 - R[0][0]) * R[0][1] * R[1][1]
+            + R[0][0] * (1.0 - R[0][1]) * R[1][1]
+            + R[0][0] * R[0][1] * (1.0 - R[1][1]));
     }
     else if (vertNumb == 4) {
         double a, b, c, d, e, f;

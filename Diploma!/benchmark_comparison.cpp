@@ -16,6 +16,7 @@ int main() {
     const int num_threads = 12;
     const int task_cutoff = 10;
 
+    // Прогрев пула потоков OpenMP (убираем эффект холодного старта)
     omp_set_num_threads(num_threads);
 #pragma omp parallel
     {
@@ -24,23 +25,25 @@ int main() {
     }
 
     std::cout << "====================================================================\n";
-    std::cout << "    CSR (KAO-FO) vs Bitmask (Serial & Parallel OpenMP " << num_threads << " threads)\n";
+    std::cout << "    CSR (KAO-FO) vs Bitmask (Averaged, OpenMP " << num_threads << " threads)\n";
     std::cout << "====================================================================\n\n";
 
     struct TestConfig {
         std::string name;
         std::function<math::Graph* ()> gen;
         bool run_serial;
+        int runs;
     };
 
+    // Чем меньше граф — тем больше прогонов для подавления шума таймера и ОС
     std::vector<TestConfig> tests = {
-        { "Grid 3x3",     []() { return math::GraphGenerator::generateGrid(2, 2); }, true },
-        { "Grid 4x4",     []() { return math::GraphGenerator::generateGrid(3, 3); }, true },
-        { "Grid 5x5",     []() { return math::GraphGenerator::generateGrid(4, 4); }, true },
-        { "Grid 5x6",     []() { return math::GraphGenerator::generateGrid(4, 5); }, true },
-        { "Grid 6x6",     []() { return math::GraphGenerator::generateGrid(5, 5); }, true },
-        { "Complete K13", []() { return math::GraphGenerator::generateCompleteGraph(13); }, false },
-        { "Grid 6x7",     []() { return math::GraphGenerator::generateGrid(5, 6); }, false }
+        { "Grid 3x3",     []() { return math::GraphGenerator::generateGrid(2, 2); }, true,  1000 },
+        { "Grid 4x4",     []() { return math::GraphGenerator::generateGrid(3, 3); }, true,   500 },
+        { "Grid 5x5",     []() { return math::GraphGenerator::generateGrid(4, 4); }, true,    50 },
+        { "Grid 5x6",     []() { return math::GraphGenerator::generateGrid(4, 5); }, true,    10 },
+        { "Grid 6x6",     []() { return math::GraphGenerator::generateGrid(5, 5); }, true,     3 },
+        { "Complete K13", []() { return math::GraphGenerator::generateCompleteGraph(13); }, false, 5 },
+        { "Grid 6x7",     []() { return math::GraphGenerator::generateGrid(5, 6); }, false,    1 }
     };
 
     std::cout << std::fixed << std::setprecision(6);
@@ -48,7 +51,8 @@ int main() {
     for (auto& test : tests) {
         math::Graph* g_init = test.gen();
         std::cout << "--- Test: " << test.name << " (" << g_init->getVertNumb()
-            << " nodes, " << g_init->getEdgNumb() << " edges) ---\n" << std::flush;
+            << " nodes, " << g_init->getEdgNumb() << " edges, avg of "
+            << test.runs << " runs) ---\n" << std::flush;
         GraphMask mask = convertToMask(g_init);
         delete g_init;
 
@@ -56,22 +60,30 @@ int main() {
         double time_mask_ser = 0.0, rel_mask_ser = 0.0;
 
         if (test.run_serial) {
-            math::Graph* g_ser = test.gen();
-            auto t1 = std::chrono::steady_clock::now();
-            rel_csr_ser = math::GraphFactory::factoring(
-                g_ser, math::FactoringType::NO_REVERSE_REC_FACTORING, math::FactoringExecutionType::SERIAL);
-            auto t2 = std::chrono::steady_clock::now();
-            time_csr_ser = std::chrono::duration<double>(t2 - t1).count();
-            delete g_ser;
+            double total_csr_ser = 0.0;
+            for (int r = 0; r < test.runs; ++r) {
+                math::Graph* g_ser = test.gen();
+                auto t1 = std::chrono::steady_clock::now();
+                rel_csr_ser = math::GraphFactory::factoring(
+                    g_ser, math::FactoringType::NO_REVERSE_REC_FACTORING, math::FactoringExecutionType::SERIAL);
+                auto t2 = std::chrono::steady_clock::now();
+                total_csr_ser += std::chrono::duration<double>(t2 - t1).count();
+                delete g_ser;
+            }
+            time_csr_ser = total_csr_ser / test.runs;
 
-            auto t3 = std::chrono::steady_clock::now();
-            rel_mask_ser = factoring_mask(mask);
-            auto t4 = std::chrono::steady_clock::now();
-            time_mask_ser = std::chrono::duration<double>(t4 - t3).count();
+            double total_mask_ser = 0.0;
+            for (int r = 0; r < test.runs; ++r) {
+                auto t3 = std::chrono::steady_clock::now();
+                rel_mask_ser = factoring_mask(mask);
+                auto t4 = std::chrono::steady_clock::now();
+                total_mask_ser += std::chrono::duration<double>(t4 - t3).count();
+            }
+            time_mask_ser = total_mask_ser / test.runs;
 
-            std::cout << "  [SERIAL]   CSR      | Time: " << std::setw(10) << time_csr_ser
+            std::cout << "  [SERIAL]   CSR      | Avg Time: " << std::setw(10) << time_csr_ser
                 << " s | Rel: " << rel_csr_ser << "\n";
-            std::cout << "  [SERIAL]   Bitmask  | Time: " << std::setw(10) << time_mask_ser
+            std::cout << "  [SERIAL]   Bitmask  | Avg Time: " << std::setw(10) << time_mask_ser
                 << " s | Rel: " << rel_mask_ser << "\n";
             if (time_mask_ser > 0.0) {
                 std::cout << "  => Serial speedup (Bitmask vs CSR): " << std::setprecision(2)
@@ -80,26 +92,34 @@ int main() {
             std::cout << std::flush;
         }
 
-        
+        // Параллельный CSR
         omp_set_num_threads(num_threads);
-        math::Graph* g_par = test.gen();
-        auto p1 = std::chrono::steady_clock::now();
-        double rel_csr_par = math::GraphFactory::factoring(
-            g_par, math::FactoringType::NO_REVERSE_REC_FACTORING, math::FactoringExecutionType::PARALLEL);
-        auto p2 = std::chrono::steady_clock::now();
-        double time_csr_par = std::chrono::duration<double>(p2 - p1).count();
-        delete g_par;
+        double total_csr_par = 0.0, rel_csr_par = 0.0;
+        for (int r = 0; r < test.runs; ++r) {
+            math::Graph* g_par = test.gen();
+            auto p1 = std::chrono::steady_clock::now();
+            rel_csr_par = math::GraphFactory::factoring(
+                g_par, math::FactoringType::NO_REVERSE_REC_FACTORING, math::FactoringExecutionType::PARALLEL);
+            auto p2 = std::chrono::steady_clock::now();
+            total_csr_par += std::chrono::duration<double>(p2 - p1).count();
+            delete g_par;
+        }
+        double time_csr_par = total_csr_par / test.runs;
 
-        std::cout << "  [PARALLEL] CSR      | Time: " << std::setw(10) << time_csr_par
+        std::cout << "  [PARALLEL] CSR      | Avg Time: " << std::setw(10) << time_csr_par
             << " s | Rel: " << rel_csr_par << "\n" << std::flush;
 
-        
-        auto p3 = std::chrono::steady_clock::now();
-        double rel_mask_par = factoring_mask_parallel(mask, task_cutoff);
-        auto p4 = std::chrono::steady_clock::now();
-        double time_mask_par = std::chrono::duration<double>(p4 - p3).count();
+        // Параллельный Bitmask
+        double total_mask_par = 0.0, rel_mask_par = 0.0;
+        for (int r = 0; r < test.runs; ++r) {
+            auto p3 = std::chrono::steady_clock::now();
+            rel_mask_par = factoring_mask_parallel(mask, task_cutoff);
+            auto p4 = std::chrono::steady_clock::now();
+            total_mask_par += std::chrono::duration<double>(p4 - p3).count();
+        }
+        double time_mask_par = total_mask_par / test.runs;
 
-        std::cout << "  [PARALLEL] Bitmask  | Time: " << std::setw(10) << time_mask_par
+        std::cout << "  [PARALLEL] Bitmask  | Avg Time: " << std::setw(10) << time_mask_par
             << " s | Rel: " << rel_mask_par << "\n";
 
         if (time_mask_par > 0.0) {
@@ -134,10 +154,16 @@ int main() {
     for (int th : thread_counts) {
         omp_set_num_threads(th);
 
-        auto s1 = std::chrono::steady_clock::now();
-        double r_mask = (th == 1) ? factoring_mask(mask67) : factoring_mask_parallel(mask67, task_cutoff);
-        auto e1 = std::chrono::steady_clock::now();
-        double t_mask = std::chrono::duration<double>(e1 - s1).count();
+        // Для Bitmask на >= 4 потоках усредняем по 3 прогонам, для CSR оставляем 1 контрольный
+        int mask_runs = (th >= 4) ? 3 : 1;
+        double total_mask = 0.0, r_mask = 0.0;
+        for (int r = 0; r < mask_runs; ++r) {
+            auto s1 = std::chrono::steady_clock::now();
+            r_mask = (th == 1) ? factoring_mask(mask67) : factoring_mask_parallel(mask67, task_cutoff);
+            auto e1 = std::chrono::steady_clock::now();
+            total_mask += std::chrono::duration<double>(e1 - s1).count();
+        }
+        double t_mask = total_mask / mask_runs;
         if (th == 1) base_mask_time = t_mask;
 
         math::Graph* g67_run = math::GraphGenerator::generateGrid(5, 6);
@@ -150,7 +176,7 @@ int main() {
         if (th == 1) base_csr_time = t_csr;
 
         std::cout << "Threads: " << std::setw(2) << th
-            << " | Bitmask: " << std::fixed << std::setprecision(3) << std::setw(7) << t_mask << " s ("
+            << " | Bitmask (x" << mask_runs << "): " << std::fixed << std::setprecision(3) << std::setw(7) << t_mask << " s ("
             << std::setprecision(2) << (base_mask_time / t_mask) << "x)"
             << " | CSR: " << std::setprecision(3) << std::setw(7) << t_csr << " s ("
             << std::setprecision(2) << (base_csr_time / t_csr) << "x)"
