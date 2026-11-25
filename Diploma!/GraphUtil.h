@@ -112,7 +112,7 @@ class GraphFactory {
     
 public:
     // Добавляем структуру с выравниванием памяти (padding) на 64 байта(защита от false sharing)
-    struct AlignedDouble {
+    struct alignas(64) AlignedDouble {
         double val;
         char pad[64 - sizeof(double)];
     };

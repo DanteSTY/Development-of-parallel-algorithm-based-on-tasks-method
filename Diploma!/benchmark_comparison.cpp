@@ -80,7 +80,7 @@ int main() {
             std::cout << std::flush;
         }
 
-        // Параллельный CSR — печатаем сразу
+        
         omp_set_num_threads(num_threads);
         math::Graph* g_par = test.gen();
         auto p1 = std::chrono::steady_clock::now();
@@ -93,7 +93,7 @@ int main() {
         std::cout << "  [PARALLEL] CSR      | Time: " << std::setw(10) << time_csr_par
             << " s | Rel: " << rel_csr_par << "\n" << std::flush;
 
-        // Параллельный Bitmask — печатаем сразу
+        
         auto p3 = std::chrono::steady_clock::now();
         double rel_mask_par = factoring_mask_parallel(mask, task_cutoff);
         auto p4 = std::chrono::steady_clock::now();

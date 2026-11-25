@@ -494,6 +494,21 @@ void GraphFactory::choseVerts(Graph*& graph, double& p, u_int& u, u_int& v, u_in
 //____________________________________________________FACTORING____________________________________________________
 
 
+static double reduceGraph(Graph* graph) {
+    double totalFactor = 1.0;
+    u_int prevVerts;
+    do {
+        prevVerts = graph->getVertNumb();
+        double shootsFactor = 1.0;
+        double pstFactor = 1.0;
+        graph->shootsDeletion(shootsFactor);
+        graph->parallelSeriesTransformation(pstFactor);
+        totalFactor *= shootsFactor * pstFactor;
+    } while (graph->getVertNumb() < prevVerts && graph->getVertNumb() > 1);
+    return totalFactor;
+}
+
+
 
 void GraphFactory::branchingWithNoReverse(Graph *&graph, double &rel, double prob) {
     //recursive_deep++;
@@ -503,9 +518,9 @@ void GraphFactory::branchingWithNoReverse(Graph *&graph, double &rel, double pro
     u_int u, v, uC, vC;
     double pstFactor, p;
 
-    graph->parallelSeriesTransformation(pstFactor);
-    //if (graph->getVertNumb() > 5)
-    if (graph->getVertNumb() > 3) {
+    pstFactor = reduceGraph(graph);
+    //if (graph->getVertNumb() > 3)
+    if (graph->getVertNumb() > 5) {
         choseVerts(graph, p, u, v, uC, vC);
         Graph *merge = graph->mergeEdge(u, v);
         Graph *cut = graph->cutEdge(u, v);
@@ -523,7 +538,7 @@ void GraphFactory::branchingWithNoReverse(Graph *&graph, double &rel, double pro
 }
 
 
-//параллелизация без обратного хода
+//РїР°СЂР°Р»Р»РµР»РёР·Р°С†РёСЏ Р±РµР· РѕР±СЂР°С‚РЅРѕРіРѕ С…РѕРґР°
 void GraphFactory::branchingWithNoReverse_parallel(Graph* graph, double prob) {
     int tid = omp_get_thread_num();
     GraphFactory::recursive_deep_arr[tid]++;
@@ -531,11 +546,8 @@ void GraphFactory::branchingWithNoReverse_parallel(Graph* graph, double prob) {
     u_int u, v, uC, vC;
     double pstFactor, p;
 
-    // do series-parallel reduction
-    graph->parallelSeriesTransformation(pstFactor);
-
-    // (Cutoff)
-    // If the graph is small, we count it sequentially in the current flow
+    
+    pstFactor = reduceGraph(graph);
     if (graph->getVertNumb() <= 10) {
         double local_rel = 0.0;
         //  (prob * pstFactor)
@@ -582,16 +594,16 @@ void GraphFactory::branchingWithNoReverse_parallel(Graph* graph, double prob) {
 
 
 
-//ветвление
+//РІРµС‚РІР»РµРЅРёРµ
 double GraphFactory::branching(Graph*& graph) {
     GraphFactory::recursive_deep_arr[omp_get_thread_num()]++;
     u_int u, v, uC, vC;
     double pstFactor, p, result;
 
-    graph->parallelSeriesTransformation(pstFactor);
+    pstFactor = reduceGraph(graph);
 
-    // if (graph->getVertNumb() > 5)
-    if (graph->getVertNumb() > 3) {
+    // if (graph->getVertNumb() > 3)
+    if (graph->getVertNumb() > 5) {
         choseVerts(graph, p, u, v, uC, vC);
         Graph* merge = graph->mergeEdge(u, v);
         Graph* cut = graph->cutEdge(u, v);
@@ -607,19 +619,19 @@ double GraphFactory::branching(Graph*& graph) {
         return result;
     }
     else {
-        // Сюда алгоритм зайдет только для 1, 2 или 3 узлов.
-        // Формулы для <= 3 работают идеально математически точно!
+        // РЎСЋРґР° Р°Р»РіРѕСЂРёС‚Рј Р·Р°Р№РґРµС‚ С‚РѕР»СЊРєРѕ РґР»СЏ 1, 2 РёР»Рё 3 СѓР·Р»РѕРІ.
+        // Р¤РѕСЂРјСѓР»С‹ РґР»СЏ <= 3 СЂР°Р±РѕС‚Р°СЋС‚ РёРґРµР°Р»СЊРЅРѕ РјР°С‚РµРјР°С‚РёС‡РµСЃРєРё С‚РѕС‡РЅРѕ!
         return pstFactor * graph->baseProbabilities();
     }
 }
-//паралллизация(ветвление) с обратным ходом
+//РїР°СЂР°Р»Р»Р»РёР·Р°С†РёСЏ(РІРµС‚РІР»РµРЅРёРµ) СЃ РѕР±СЂР°С‚РЅС‹Рј С…РѕРґРѕРј
 double GraphFactory::branching_parallel(Graph* graph) {
     GraphFactory::recursive_deep_arr[omp_get_thread_num()]++;
 
     u_int u, v, uC, vC;
     double pstFactor, p, result = 0;
 
-    graph->parallelSeriesTransformation(pstFactor);
+    pstFactor = reduceGraph(graph);
 
     // cutoff threshold      
     if (graph->getVertNumb() <= 10) {
@@ -661,7 +673,7 @@ double GraphFactory::branching_parallel(Graph* graph) {
 }
 
 
-//факторизация
+//С„Р°РєС‚РѕСЂРёР·Р°С†РёСЏ
 double GraphFactory::factoring(Graph*& graph, FactoringType factoringType, FactoringExecutionType execType) {
   
     for (int i = 0; i < 64; i++) {

@@ -215,8 +215,8 @@ Graph *Graph::mergeEdge(u_int u, u_int v) const {
     u_int *newKAO;
     u_int *newFO;
     double *newFORel;
-    u_int newVert;      //номер вершины, в которую осуществляется стягивание (выбирается наименьшая по номеру из пары (u, v))
-    u_int delVert;      //номер вершины, которая будет удалена из графа
+    u_int newVert;      //РЅРѕРјРµСЂ РІРµСЂС€РёРЅС‹, РІ РєРѕС‚РѕСЂСѓСЋ РѕСЃСѓС‰РµСЃС‚РІР»СЏРµС‚СЃСЏ СЃС‚СЏРіРёРІР°РЅРёРµ (РІС‹Р±РёСЂР°РµС‚СЃСЏ РЅР°РёРјРµРЅСЊС€Р°СЏ РїРѕ РЅРѕРјРµСЂСѓ РёР· РїР°СЂС‹ (u, v))
+    u_int delVert;      //РЅРѕРјРµСЂ РІРµСЂС€РёРЅС‹, РєРѕС‚РѕСЂР°СЏ Р±СѓРґРµС‚ СѓРґР°Р»РµРЅР° РёР· РіСЂР°С„Р°
 
     if (u < v) {
         newVert = u;
@@ -346,7 +346,7 @@ Graph *Graph::mergeEdge(u_int u, u_int v) const {
 }
 
 Graph *Graph::cutEdge(u_int u, u_int v) const {
-    // БЫЛО: if ((u == 0) || (u > edgNumb) || (v == 0) || (v > edgNumb) || (!isEdge(u, v))) и в mergeEdge, deg
+    // Р‘Р«Р›Рћ: if ((u == 0) || (u > edgNumb) || (v == 0) || (v > edgNumb) || (!isEdge(u, v))) Рё РІ mergeEdge, deg
     if ((u == 0) || (u > vertNumb) || (v == 0) || (v > vertNumb) || (!isEdge(u, v))) {
         return nullptr;     //raise exception here
     }
@@ -392,78 +392,115 @@ Graph *Graph::cutEdge(u_int u, u_int v) const {
     return result;
 }
 
-void Graph::shootsDeletion(double &prob) {
+void Graph::shootsDeletion(double& prob) {
     prob = 1.0;
-    UniqueSortedList<u_int> delVerts;
-    u_int delVertNum = 0;
-    u_int *newKAO;
-    u_int *newFO;
-    double *newFORel;
+    if (vertNumb <= 1) {
+        return;
+    }
 
+    
+    bool hasShoot = false;
     for (u_int i = 1; i <= vertNumb; i++) {
         if ((KAO[i] - KAO[i - 1]) == 1) {
-            prob *= FORel[KAO[i - 1]];
-            delVerts.insert(i);
-            u_int v = FO[KAO[i - 1]];
-            u_int prevV = i;
-            while (true) {
-                if ((KAO[v] - KAO[v - 1]) == 2) {
-                    delVerts.insert(i);
-                    for (u_int j = KAO[v - 1]; j < KAO[v]; j++) {
-                        if (FO[j] == prevV) {
-                            continue;
-                        }
-                        prevV = v;
-                        v = FO[j];
-                        prob *= FORel[j];
-                        break;
-                    }
-                }
-                else {
-                    break;
-                }
-            }
+            hasShoot = true;
+            break;
+        }
+    }
+    if (!hasShoot) {
+        return;
+    }
+
+    std::vector<u_int> curDeg(vertNumb + 1, 0);
+    std::vector<bool> deleted(vertNumb + 1, false);
+    std::vector<u_int> queue;
+    queue.reserve(vertNumb);
+
+    for (u_int i = 1; i <= vertNumb; i++) {
+        curDeg[i] = KAO[i] - KAO[i - 1];
+        if (curDeg[i] == 1) {
+            queue.push_back(i);
         }
     }
 
-    delVertNum = delVerts.len();
+    u_int remainingVerts = vertNumb;
+    u_int delVertNum = 0;
+
+    
+    for (size_t head = 0; head < queue.size() && remainingVerts > 1; head++) {
+        u_int u = queue[head];
+        if (deleted[u] || curDeg[u] != 1) {
+            continue;
+        }
+
+        u_int neighbor = 0;
+        double edgeProb = 0.0;
+        for (u_int j = KAO[u - 1]; j < KAO[u]; j++) {
+            u_int v = FO[j];
+            if (!deleted[v]) {
+                neighbor = v;
+                edgeProb = FORel[j];
+                break;
+            }
+        }
+        if (neighbor == 0) {
+            continue;
+        }
+
+        deleted[u] = true;
+        curDeg[u] = 0;
+        delVertNum++;
+        remainingVerts--;
+        prob *= edgeProb;
+
+        curDeg[neighbor]--;
+        if (curDeg[neighbor] == 1 && remainingVerts > 1) {
+            queue.push_back(neighbor);
+        }
+    }
+
     if (delVertNum == 0) {
         return;
     }
-    memallocNewGraph(vertNumb - delVertNum, edgNumb - delVertNum, newKAO, newFO, newFORel);
 
-    u_int currentPos;
+    
+    std::vector<u_int> newId(vertNumb + 1, 0);
+    u_int nextId = 1;
+    for (u_int i = 1; i <= vertNumb; i++) {
+        if (!deleted[i]) {
+            newId[i] = nextId++;
+        }
+    }
+
+    u_int newVertNumb = vertNumb - delVertNum;
+    u_int newEdgNumb = edgNumb - delVertNum;
+    u_int* newKAO;
+    u_int* newFO;
+    double* newFORel;
+    memallocNewGraph(newVertNumb, newEdgNumb, newKAO, newFO, newFORel);
+
     newKAO[0] = 0;
     u_int iC = 1;
     u_int jC = 0;
     for (u_int i = 1; i <= vertNumb; i++) {
-        if (delVerts.inList(i)) {
+        if (deleted[i]) {
             continue;
         }
-
-        newKAO[iC] = newKAO[iC - 1] + (KAO[i] - KAO[i - 1]);
         for (u_int j = KAO[i - 1]; j < KAO[i]; j++) {
-            if (delVerts.inList(FO[j])) {
-                newKAO[iC]--;
+            u_int v = FO[j];
+            if (deleted[v]) {
                 continue;
             }
-            currentPos = delVerts.positionBetween(FO[j]);
-            if (currentPos == 0) {
-                newFO[jC] = FO[j];
-            }
-            else {
-                newFO[jC] = FO[j] - currentPos;
-            }
+            newFO[jC] = newId[v];
             newFORel[jC] = FORel[j];
             jC++;
         }
-
+        newKAO[iC] = jC;
         iC++;
     }
-    
+
     memclear();
-    vertNumb -= delVertNum;
-    edgNumb -= delVertNum;
+    vertNumb = newVertNumb;
+    edgNumb = newEdgNumb;
     KAO = newKAO;
     FO = newFO;
     FORel = newFORel;
